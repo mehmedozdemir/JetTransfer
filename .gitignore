@@ -1,0 +1,43 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Environment variables
+.env
+.env.local
+
+# Database files (Important for this ETL project)
+*.db
+*.sqlite
+*.sqlite3
+jettransfer_state.db
+
+# Cryptography keys (To prevent leaking encryption keys)
+*.key
+*.pem
+
+# IDE / Editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Distribution / Packaging
+dist/
+build/
+*.egg-info/
+*.spec
+# PyQt5/PyQt6 translation files
+*.qm
+
+# OS generated files
+.DS_Store
+Thumbs.db
