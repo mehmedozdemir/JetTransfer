@@ -58,28 +58,35 @@ class TransfersTab(QWidget):
         if wizard.exec():
             src_id = wizard.source_id
             tgt_id = wizard.target_id
-            src_table = wizard.selected_source_table
-            tgt_table = wizard.selected_target_table
-            custom_ddl = wizard.custom_ddl
+            mappings = wizard.transfer_mappings
             
-            if not src_table: return
+            if not mappings: return
 
             try:
                 conn = get_connection()
                 cursor = conn.cursor()
-                cursor.execute('''
-                    INSERT INTO transfer_jobs (
-                        source_conn_id, target_conn_id, source_schema, target_schema, 
-                        source_table, target_table, status, custom_ddl, column_mapping
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (src_id, tgt_id, wizard.source_schema, wizard.target_schema, src_table, tgt_table, 'BEKLIYOR', custom_ddl, wizard.column_mapping))
+                
+                for map_data in mappings:
+                    src_table = map_data.get("src_table")
+                    tgt_table = map_data.get("tgt_table")
+                    custom_ddl = map_data.get("custom_ddl", "")
+                    col_map = map_data.get("column_mapping", "{}")
+                    
+                    cursor.execute('''
+                        INSERT INTO transfer_jobs (
+                            source_conn_id, target_conn_id, source_schema, target_schema, 
+                            source_table, target_table, status, custom_ddl, column_mapping
+                        )
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (src_id, tgt_id, wizard.source_schema, wizard.target_schema, 
+                          src_table, tgt_table, 'BEKLIYOR', custom_ddl, col_map))
+                
                 conn.commit()
                 conn.close()
-                QMessageBox.information(self, "Başarılı", "Eşleştirmeli aktarım görevi (BEKLIYOR durumunda) eklendi.")
+                QMessageBox.information(self, "Başarılı", f"{len(mappings)} adet tablo başarıyla eşleştirildi ve aktarım kuyruğuna (BEKLIYOR) eklendi.")
                 self.load_jobs()
             except Exception as e:
-                QMessageBox.critical(self, "Hata", f"Görev oluşturulamadı:\n{e}")
+                QMessageBox.critical(self, "Hata", f"Görevler oluşturulamadı:\n{e}")
 
     def load_jobs(self):
         conn = get_connection()
