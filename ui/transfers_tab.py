@@ -1,5 +1,6 @@
 from PyQt6.QtWidgets import (QWidget, QVBoxLayout, QLabel, QPushButton, QHBoxLayout, 
-                             QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, QProgressBar)
+                             QTableWidget, QTableWidgetItem, QHeaderView, QMessageBox, 
+                             QProgressBar, QDialog, QTextEdit, QSpinBox, QSplitter, QAbstractItemView, QApplication)
 from PyQt6.QtCore import Qt, pyqtSlot
 import qtawesome as qta
 
@@ -16,6 +17,156 @@ def get_adapter(db_type):
     if db_type == "MS SQL Server": return MSSQLAdapter()
     if db_type == "Oracle": return OracleAdapter()
     return None
+
+class CustomSqlDialog(QDialog):
+    def __init__(self, job_id, current_sql, current_limit, parent=None):
+        super().__init__(parent)
+        self.job_id = job_id
+        self.setWindowTitle(f"Görev ID {job_id} - SQL Filtre & Canlı Önizleme")
+        self.resize(800, 600)
+        self.setStyleSheet("background-color: #1e1e2e; color: #cdd6f4; font-size: 13px;")
+        
+        main_layout = QVBoxLayout(self)
+        
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        
+        # --- Top Pane ---
+        top_widget = QWidget()
+        top_layout = QVBoxLayout(top_widget)
+        top_layout.setContentsMargins(0,0,0,0)
+        top_layout.addWidget(QLabel("Özel Veri Çekme Sorgusu (Örn: SELECT * FROM tablo WHERE durum='aktif')"))
+        
+        self.text_sql = QTextEdit()
+        self.text_sql.setStyleSheet("background-color: #313244; font-family: monospace;")
+        if current_sql:
+            self.text_sql.setText(current_sql)
+        else:
+            self.text_sql.setPlaceholderText("SELECT * FROM tablo_adiniz")
+        top_layout.addWidget(self.text_sql)
+        
+        limit_layout = QHBoxLayout()
+        limit_layout.addWidget(QLabel("Maksimum Aktarılacak Satır (0 = Tümü):"))
+        self.spin_limit = QSpinBox()
+        self.spin_limit.setRange(0, 2000000000)
+        self.spin_limit.setValue(current_limit if current_limit else 0)
+        self.spin_limit.setStyleSheet("background-color: #313244; padding: 5px;")
+        limit_layout.addWidget(self.spin_limit)
+
+        limit_layout.addSpacing(20)
+        limit_layout.addWidget(QLabel("Önizleme Satır Sayısı:"))
+        self.spin_preview = QSpinBox()
+        self.spin_preview.setRange(1, 5000)
+        self.spin_preview.setValue(200) # User requested 200 as default
+        self.spin_preview.setStyleSheet("background-color: #313244; padding: 5px;")
+        limit_layout.addWidget(self.spin_preview)
+        
+        limit_layout.addStretch()
+        top_layout.addLayout(limit_layout)
+        
+        btn_layout = QHBoxLayout()
+        self.lbl_error = QLabel("")
+        self.lbl_error.setStyleSheet("color: #f38ba8;") # red color
+        btn_layout.addWidget(self.lbl_error)
+        
+        btn_layout.addStretch()
+        
+        self.btn_preview = QPushButton(" Canlı Önizle (Test Et)")
+        self.btn_preview.setIcon(qta.icon('fa5s.play', color='#11111b'))
+        self.btn_preview.setStyleSheet("background-color: #a6e3a1; color: #11111b; font-weight: bold; padding: 6px;")
+        self.btn_preview.clicked.connect(self.preview_data)
+        btn_layout.addWidget(self.btn_preview)
+        
+        self.btn_save = QPushButton("Kaydet ve Kapat")
+        self.btn_save.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold; padding: 6px;")
+        self.btn_save.clicked.connect(self.save_and_close)
+        btn_layout.addWidget(self.btn_save)
+        top_layout.addLayout(btn_layout)
+        
+        # --- Bottom Pane ---
+        bot_widget = QWidget()
+        bot_layout = QVBoxLayout(bot_widget)
+        bot_layout.setContentsMargins(0,0,0,0)
+        
+        self.table_preview = QTableWidget()
+        self.table_preview.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table_preview.setStyleSheet("background-color: #313244; color: #cdd6f4; gridline-color: #45475a;")
+        bot_layout.addWidget(self.table_preview)
+        
+        splitter.addWidget(top_widget)
+        splitter.addWidget(bot_widget)
+        splitter.setSizes([300, 300])
+        main_layout.addWidget(splitter)
+        
+    def preview_data(self):
+        self.lbl_error.setText("Yükleniyor...")
+        self.lbl_error.setStyleSheet("color: #cdd6f4;")
+        self.table_preview.clear()
+        self.table_preview.setRowCount(0)
+        self.table_preview.setColumnCount(0)
+        QApplication.processEvents()
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            SELECT s.db_type, s.host, s.port, s.database, s.username, s.password_encrypted
+            FROM transfer_jobs j
+            JOIN connections s ON j.source_conn_id = s.id
+            WHERE j.id = ?
+        ''', (self.job_id,))
+        row = cursor.fetchone()
+        conn.close()
+        
+        if not row:
+            self.lbl_error.setText("Kaynak bağlantı bilgisi bulunamadı.")
+            self.lbl_error.setStyleSheet("color: #f38ba8;")
+            return
+            
+        db_type, host, port, db, user, pass_enc = row
+        password = CryptoManager.decrypt(pass_enc)
+        adapter = get_adapter(db_type)
+        if not adapter:
+            self.lbl_error.setText("Sürücü desteklenmiyor.")
+            self.lbl_error.setStyleSheet("color: #f38ba8;")
+            return
+            
+        sql = self.text_sql.toPlainText().strip()
+        if not sql:
+            self.lbl_error.setText("Lütfen test edilecek bir sorgu yazın.")
+            self.lbl_error.setStyleSheet("color: #f38ba8;")
+            return
+            
+        try:
+            adapter.connect(host, port, db, user, password)
+            cur = adapter.connection.cursor()
+            cur.execute(sql)
+            columns = [desc[0] for desc in cur.description]
+            records = cur.fetchmany(self.spin_preview.value())
+            cur.close()
+            adapter.disconnect()
+            
+            self.table_preview.setColumnCount(len(columns))
+            self.table_preview.setHorizontalHeaderLabels(columns)
+            
+            self.table_preview.setRowCount(len(records))
+            for r_idx, record in enumerate(records):
+                for c_idx, val in enumerate(record):
+                    self.table_preview.setItem(r_idx, c_idx, QTableWidgetItem(str(val)))
+            self.table_preview.resizeColumnsToContents()
+            self.lbl_error.setText(f"Başarılı: {len(records)} satır getirildi.")
+            self.lbl_error.setStyleSheet("color: #a6e3a1;")
+        except Exception as e:
+            self.lbl_error.setText(f"SQL Hatası: {str(e)}")
+            self.lbl_error.setStyleSheet("color: #f38ba8;")
+
+    def save_and_close(self):
+        sql = self.text_sql.toPlainText()
+        limit = self.spin_limit.value()
+        
+        conn = get_connection()
+        conn.execute("UPDATE transfer_jobs SET custom_source_sql = ?, max_rows_limit = ? WHERE id = ?", (sql, limit, self.job_id))
+        conn.commit()
+        conn.close()
+        self.accept()
 
 class TransfersTab(QWidget):
     def __init__(self):
@@ -150,6 +301,12 @@ class TransfersTab(QWidget):
             btn_pause.setToolTip("Duraklat")
             btn_pause.clicked.connect(lambda checked, jid=job_id: self.pause_job(jid))
 
+            btn_sql = QPushButton()
+            btn_sql.setIcon(qta.icon('fa5s.code', color='#89b4fa'))
+            btn_sql.setStyleSheet("background: transparent; border: none;")
+            btn_sql.setToolTip("SQL / Limit Düzenle")
+            btn_sql.clicked.connect(lambda checked, jid=job_id: self.open_sql_editor(jid))
+
             btn_del = QPushButton()
             btn_del.setIcon(qta.icon('fa5s.trash', color='#f38ba8'))
             btn_del.setStyleSheet("background: transparent; border: none;")
@@ -158,6 +315,7 @@ class TransfersTab(QWidget):
             action_layout.addStretch()
             action_layout.addWidget(btn_play)
             action_layout.addWidget(btn_pause)
+            action_layout.addWidget(btn_sql)
             action_layout.addWidget(btn_del)
             action_layout.addStretch()
 
@@ -165,6 +323,51 @@ class TransfersTab(QWidget):
             
         self.table.resizeRowsToContents()
         conn.close()
+
+    def open_sql_editor(self, job_id):
+        conn = get_connection()
+        c = conn.cursor()
+        c.execute("""
+            SELECT j.custom_source_sql, j.max_rows_limit, j.source_schema, j.source_table, j.column_mapping, s.db_type
+            FROM transfer_jobs j
+            JOIN connections s ON j.source_conn_id = s.id
+            WHERE j.id = ?
+        """, (job_id,))
+        row = c.fetchone()
+        conn.close()
+        if not row: return
+        
+        sql = row[0]
+        if not sql:
+            import json
+            schema = row[2]
+            table = row[3]
+            mapping_str = row[4]
+            db_type = row[5]
+            
+            mapping = {}
+            if mapping_str:
+                mapping = json.loads(mapping_str)
+                
+            if not schema:
+                full_table = table
+            elif db_type == "PostgreSQL":
+                full_table = f'"{schema}"."{table}"'
+            elif db_type == "MS SQL Server":
+                full_table = f'[{schema}].[{table}]'
+            elif db_type == "Oracle":
+                full_table = f'"{schema}"."{table}"'
+            else:
+                full_table = f"{schema}.{table}"
+                
+            cols_str = "*"
+            if mapping:
+                cols_str = ", ".join([f'"{c}"' for c in mapping.keys()])
+                
+            sql = f"SELECT {cols_str} \nFROM {full_table}"
+        
+        dialog = CustomSqlDialog(job_id, sql, row[1], self)
+        dialog.exec()
 
     def update_job_status(self, job_id, status):
         conn = get_connection()
@@ -189,7 +392,7 @@ class TransfersTab(QWidget):
             SELECT j.source_schema, j.source_table, j.target_schema, j.target_table, 
                    s.db_type, s.host, s.port, s.database, s.username, s.password_encrypted,
                    t.db_type, t.host, t.port, t.database, t.username, t.password_encrypted,
-                   j.custom_ddl, j.column_mapping
+                   j.custom_ddl, j.column_mapping, j.custom_source_sql, j.max_rows_limit
             FROM transfer_jobs j
             JOIN connections s ON j.source_conn_id = s.id
             JOIN connections t ON j.target_conn_id = t.id
@@ -201,14 +404,13 @@ class TransfersTab(QWidget):
         if not row: return
 
         # Format tables correctly as [schema].[table] for the engines to consume implicitly if needed.
-        # But wait, syntax differs. Postgres uses schema.table. MSSQL uses [schema].[table]. Oracle uses "schema"."table".
-        # Passing them dynamically formatted is better done in the adapters or engine. 
-        # For simplicity, we can format them here according to driver needs, or modify adapters.
         s_schema, src_t_raw, t_schema, tgt_t_raw = row[0], row[1], row[2], row[3]
         s_type, s_host, s_port, s_db, s_user, s_pass_enc = row[4:10]
         t_type, t_host, t_port, t_db, t_user, t_pass_enc = row[10:16]
         custom_ddl = row[16]
         column_mapping = row[17]
+        custom_sql = row[18]
+        max_rows = row[19]
         
         # Dialect specific schema appending helper
         def fmt_table(t_type, schema, table):
@@ -245,7 +447,7 @@ class TransfersTab(QWidget):
             QMessageBox.critical(self, "Bağlantı Hatası", f"Görev başlatılamadı:\n{e}")
             return
 
-        engine = TransferEngine(source_adapter, target_adapter, src_table, tgt_table, column_mapping)
+        engine = TransferEngine(source_adapter, target_adapter, src_table, tgt_table, column_mapping, custom_source_sql=custom_sql, max_rows_limit=max_rows)
         self.active_workers[job_id] = engine
 
         # Connect signals
