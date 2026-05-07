@@ -214,5 +214,12 @@ if __name__ == "__main__":
 
     window = MainWindow()
     window.resize(1200, 800)
+    
+    # Ekranın tam ortasına yerleştirme (screen center)
+    center_point = app.primaryScreen().availableGeometry().center()
+    frame_geometry = window.frameGeometry()
+    frame_geometry.moveCenter(center_point)
+    window.move(frame_geometry.topLeft())
+
     window.show()
     sys.exit(app.exec())
